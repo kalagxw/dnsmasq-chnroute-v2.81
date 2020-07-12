@@ -157,6 +157,7 @@ struct myoption {
 #define LOPT_DHCPTTL       348
 #define LOPT_TFTP_MTU      349
 #define LOPT_REPLY_DELAY   350
+#define LOPT_CHNROUTES_FILE 999
 #define LOPT_RAPID_COMMIT  351
 #define LOPT_DUMPFILE      352
 #define LOPT_DUMPMASK      353
@@ -202,6 +203,7 @@ static const struct myoption opts[] =
     { "bogus-priv", 0, 0, 'b' },
     { "bogus-nxdomain", 1, 0, 'B' },
     { "ignore-address", 1, 0, LOPT_IGNORE_ADDR },
+    { "chnroutes-file", 1, 0, LOPT_CHNROUTES_FILE },
     { "selfmx", 0, 0, 'e' },
     { "filterwin2k", 0, 0, 'f' },
     { "pid-file", 2, 0, 'x' },
@@ -512,6 +514,7 @@ static struct {
   { LOPT_LOCAL_SERVICE, OPT_LOCAL_SERVICE, NULL, gettext_noop("Accept queries only from directly-connected networks."), NULL },
   { LOPT_LOOP_DETECT, OPT_LOOP_DETECT, NULL, gettext_noop("Detect and remove DNS forwarding loops."), NULL },
   { LOPT_IGNORE_ADDR, ARG_DUP, "<ipaddr>", gettext_noop("Ignore DNS responses containing ipaddr."), NULL }, 
+  { LOPT_CHNROUTES_FILE, ARG_ONE, "<path>", gettext_noop("Trust dns server not containing ipaddr, untrust dns server containing ipaddr."), NULL }, 
   { LOPT_DHCPTTL, ARG_ONE, "<ttl>", gettext_noop("Set TTL in DNS responses with DHCP-derived addresses."), NULL }, 
   { LOPT_REPLY_DELAY, ARG_ONE, "<integer>", gettext_noop("Delay DHCP replies for at least number of seconds."), NULL },
   { LOPT_RAPID_COMMIT, OPT_RAPID_COMMIT, NULL, gettext_noop("Enables DHCPv4 Rapid Commit option."), NULL },
@@ -781,11 +784,12 @@ static char *parse_mysockaddr(char *arg, union mysockaddr *addr)
 char *parse_server(char *arg, union mysockaddr *addr, union mysockaddr *source_addr, char *interface, int *flags)
 {
   int source_port = 0, serv_port = NAMESERVER_PORT;
-  char *portno, *source;
+  char *portno, *source, *trust_type;
   char *interface_opt = NULL;
   int scope_index = 0;
   char *scope_id;
   
+  *trust = -1;/* init trust type to unknown */
   if (!arg || strlen(arg) == 0)
     {
       *flags |= SERV_NO_ADDR;
@@ -797,6 +801,10 @@ char *parse_server(char *arg, union mysockaddr *addr, union mysockaddr *source_a
       (portno = split_chr(source, '#')) &&
       !atoi_check16(portno, &source_port))
     return _("bad port");
+	
+    if ((trust_type = split_chr(arg, ',')) && /* is there a server#port,trust. */
+       !atoi_check16(trust_type, trust))
+     return _("bad trust type");
   
   if ((portno = split_chr(arg, '#')) && /* is there a port no. */
       !atoi_check16(portno, &serv_port))
@@ -1640,6 +1648,63 @@ static void server_list_free(struct server *list)
     }
 }
 
+ int cmp_net_mask(const void *a, const void *b) {
+   struct net_mask_t *neta = (struct net_mask_t *)a;
+   struct net_mask_t *netb = (struct net_mask_t *)b;
+   if (neta->net.s_addr == netb->net.s_addr)
+     return 0;
+   // TODO: pre ntohl
+   if (ntohl(neta->net.s_addr) > ntohl(netb->net.s_addr))
+     return 1;
+   return -1;
+ }
+ 
+ static int parse_chnroutes(const char *filename, struct net_list_t *chnroutes_list) {
+   FILE *fp;
+   char line_buf[32];
+   char *line;
+   size_t len = sizeof(line_buf);
+   chnroutes_list->entries = 0;
+   int i = 0;
+ 
+   fp = fopen(filename, "rb");
+   if (fp == NULL) {
+     return -1;
+   }
+   while ((line = fgets(line_buf, len, fp))) {
+     chnroutes_list->entries++;
+   }
+ 
+   chnroutes_list->nets = calloc(chnroutes_list->entries, sizeof(struct net_mask_t));
+   if (0 != fseek(fp, 0, SEEK_SET)) {
+     return -1;
+   }
+   while ((line = fgets(line_buf, len, fp))) {
+     char *sp_pos;
+     sp_pos = strchr(line, '\r');
+     if (sp_pos) *sp_pos = 0;
+     sp_pos = strchr(line, '\n');
+     if (sp_pos) *sp_pos = 0;
+     sp_pos = strchr(line, '/');
+     if (sp_pos) {
+       *sp_pos = 0;
+       chnroutes_list->nets[i].mask = (1 << (32 - atoi(sp_pos + 1))) - 1;
+     } else {
+       chnroutes_list->nets[i].mask = UINT32_MAX;
+     }
+     if (0 == inet_aton(line, &chnroutes_list->nets[i].net)) {
+       return (i+1);
+     }
+     i++;
+   }
+ 
+   qsort(chnroutes_list->nets, chnroutes_list->entries, sizeof(struct net_mask_t),
+         cmp_net_mask);
+ 
+   fclose(fp);
+   return 0;
+ }
+ 
 static int one_opt(int option, char *arg, char *errstr, char *gen_err, int command_line, int servers_only)
 {      
   int i;
@@ -2499,6 +2564,20 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
 	break;	
       }
       
+    case LOPT_CHNROUTES_FILE: /* --chnroutes-file */
+   {
+		struct net_list_t *crlist = opt_malloc(sizeof(struct net_list_t));
+		int r = parse_chnroutes(opt_string_alloc(arg), crlist);
+		if (r < 0)
+			ret_err(_("chnroutes file open fail."));
+		if (r > 0) {
+			my_syslog(LOG_ERR, _("chnroutes file has wrong entry, line: %d"), r);
+			ret_err(_("chnroutes file has wrong entry."));
+		}
+		daemon->chnroutes_list = crlist;
+
+		break;
+   }
     case 'a':  /* --listen-address */
     case LOPT_AUTHPEER: /* --auth-peer */
       do {
@@ -2613,7 +2692,7 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
 	  newlist->flags |= SERV_USE_RESOLV; /* treat in ordinary way */
 	else
 	  {
-	    char *err = parse_server(arg, &newlist->addr, &newlist->source_addr, newlist->interface, &newlist->flags);
+	    char *err = parse_server(arg, &newlist->addr, &newlist->source_addr, newlist->interface, &newlist->flags, &newlist->trust);
 	    if (err)
 	      {
 	        server_list_free(newlist);
@@ -2663,7 +2742,7 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
 	else
 	  ret_err(gen_err);
  
-	string = parse_server(comma, &serv->addr, &serv->source_addr, serv->interface, &serv->flags);
+	string = parse_server(comma, &serv->addr, &serv->source_addr, serv->interface, &serv->flags, &serv->trust);
 	
 	if (string)
 	  ret_err(string);
