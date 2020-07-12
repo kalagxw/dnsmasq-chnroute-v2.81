@@ -1116,7 +1116,37 @@ int check_for_bogus_wildcard(struct dns_header *header, size_t qlen, char *name,
   return 0;
 }
 
-int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bogus_addr *baddr)
+ static int test_ip_in_list(struct in_addr ip, const struct net_list_t *netlist) {
+   // binary search
+   int l = 0, r = netlist->entries - 1;
+   int m, cmp;
+   if (netlist->entries == 0)
+     return 0;
+   struct net_mask_t ip_net;
+   ip_net.net = ip;
+   while (l != r) {
+     m = (l + r) / 2;
+     cmp = cmp_net_mask(&ip_net, &netlist->nets[m]);
+     if (cmp == -1) {
+       if (r != m)
+         r = m;
+       else
+         break;
+     } else {
+       if (l != m)
+         l = m;
+       else
+         break;
+     }
+   }
+   if ((ntohl(netlist->nets[l].net.s_addr) ^ ntohl(ip.s_addr)) &
+       (UINT32_MAX ^ netlist->nets[l].mask)) {
+     return 0;
+   }
+   return 1;
+ }
+ 
+ int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bogus_addr *baddr, const struct net_list_t *netlist)
 {
   unsigned char *p;
   int i, qtype, qclass, rdlen;
@@ -1141,9 +1171,18 @@ int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bog
 	  if (!CHECK_LEN(header, p, qlen, INADDRSZ))
 	    return 0;
 	  
+	  if (baddr!=NULL)    
 	  for (baddrp = baddr; baddrp; baddrp = baddrp->next)
 	    if (memcmp(&baddrp->addr, p, INADDRSZ) == 0)
 	      return 1;
+ 
+ 	  if (netlist!=NULL) {
+ 		  struct in_addr addr;
+ 		  memcpy(&addr, p, INADDRSZ);
+ 		  int c = test_ip_in_list(addr, netlist);
+ 		  //my_syslog(LOG_INFO, _("resolved ip = %s, %s chnroutes"), inet_ntoa(addr), (c?"in":"not in"));
+ 		  if (c) return 1;
+ 	  }
 	}
       
       if (!ADD_RDLEN(header, p, qlen, rdlen))
