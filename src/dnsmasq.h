@@ -553,6 +553,7 @@ struct server {
   unsigned int queries, failed_queries;
 #ifdef HAVE_LOOP
   u32 uid;
+  int trust;
 #endif
   struct server *next; 
 };
@@ -990,6 +991,16 @@ struct dhcp_relay {
   struct dhcp_relay *current, *next;
 };
 
+ struct net_mask_t {
+   struct in_addr net;
+   in_addr_t mask;
+ };
+ 
+ struct net_list_t {
+   int entries;
+   struct net_mask_t *nets;
+ };
+ 
 extern struct daemon {
   /* datastuctures representing the command-line and 
      config file arguments. All set (including defaults)
@@ -1023,6 +1034,7 @@ extern struct daemon {
   char *lease_change_command;
   struct iname *if_names, *if_addrs, *if_except, *dhcp_except, *auth_peers, *tftp_interfaces;
   struct bogus_addr *bogus_addr, *ignore_addr;
+  struct net_list_t *chnroutes_list;
   struct server *servers;
   struct ipsets *ipsets;
   int log_fac; /* log facility */
@@ -1216,7 +1228,7 @@ size_t answer_request(struct dns_header *header, char *limit, size_t qlen,
 		      time_t now, int ad_reqd, int do_bit, int have_pseudoheader);
 int check_for_bogus_wildcard(struct dns_header *header, size_t qlen, char *name, 
 			     struct bogus_addr *baddr, time_t now);
-int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bogus_addr *baddr);
+int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bogus_addr *baddr, const struct net_list_t *netlist);
 int check_for_local_domain(char *name, time_t now);
 unsigned int questions_crc(struct dns_header *header, size_t plen, char *name);
 size_t resize_packet(struct dns_header *header, size_t plen, 
@@ -1315,8 +1327,9 @@ void set_option_bool(unsigned int opt);
 void reset_option_bool(unsigned int opt);
 struct hostsfile *expand_filelist(struct hostsfile *list);
 char *parse_server(char *arg, union mysockaddr *addr, 
-		   union mysockaddr *source_addr, char *interface, int *flags);
+		   union mysockaddr *source_addr, char *interface, int *flags, int *trust);
 int option_read_dynfile(char *file, int flags);
+int cmp_net_mask(const void *a, const void *b);
 
 /* forward.c */
 void reply_query(int fd, int family, time_t now);
