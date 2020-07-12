@@ -819,9 +819,16 @@ void reply_query(int fd, int family, time_t now)
   daemon->log_source_addr = &forward->source;
   
   if (daemon->ignore_addr && RCODE(header) == NOERROR &&
-      check_for_ignored_address(header, n, daemon->ignore_addr))
+      check_for_ignored_address(header, n, daemon->ignore_addr, NULL))
     return;
 
+   //my_syslog(LOG_INFO, _("dns server=%s, trust type=%d"), inet_ntoa(serveraddr.in.sin_addr), server->trust);
+   if ((server->trust==0||server->trust==1) && daemon->chnroutes_list && RCODE(header) == NOERROR) {
+       int c = check_for_ignored_address(header, n, NULL, daemon->chnroutes_list);
+       if (server->trust==0 && c==0) return;/* untrust dns sever, and got not in chnroutes address*/
+       if (server->trust==1 && c==1) return;/* trust dns sever, and got in chnroutes address*/
+   }
+ 
   /* Note: if we send extra options in the EDNS0 header, we can't recreate
      the query from the reply. */
   if ((RCODE(header) == REFUSED || RCODE(header) == SERVFAIL) &&
