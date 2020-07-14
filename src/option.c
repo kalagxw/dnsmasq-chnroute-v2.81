@@ -781,7 +781,7 @@ static char *parse_mysockaddr(char *arg, union mysockaddr *addr)
   return NULL;
 }
 
-char *parse_server(char *arg, union mysockaddr *addr, union mysockaddr *source_addr, char *interface, int *flags)
+char *parse_server(char *arg, union mysockaddr *addr, union mysockaddr *source_addr, char *interface, int *flags, int *trust)
 {
   int source_port = 0, serv_port = NAMESERVER_PORT;
   char *portno, *source, *trust_type;
