@@ -1122,7 +1122,7 @@ extern struct daemon {
   int inotifyfd;
 #endif
 #if defined(HAVE_LINUX_NETWORK)
-  int netlinkfd, kernel_version;
+  int netlinkfd;
 #elif defined(HAVE_BSD_NETWORK)
   int dhcp_raw_fd, dhcp_icmp_fd, routefd;
 #endif
